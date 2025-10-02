@@ -1,0 +1,87 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# PyTorch/Training
+*.pth
+*.pt
+*.ckpt
+runs/
+wandb/
+weights/*.pt
+weights/*.pth
+!weights/.gitkeep
+
+# Results and Outputs (logged to W&B, don't commit to git)
+qgfl_experiments/results/
+results/
+*.log
+
+# Datasets (too large for git)
+dataset_d1/images/
+dataset_d2/images/
+dataset_d3/images/
+*.jpg
+*.png
+*.jpeg
+*.cache
+
+# Keep important configs and labels
+!configs/
+!dataset_d1/binary/
+!dataset_d1/species/
+!dataset_d1/staging/
+!dataset_d2/binary/
+!dataset_d2/species/
+!dataset_d2/staging/
+!dataset_d3/binary/
+!dataset_d3/species/
+
+# W&B
+notebooks/wandb/
+
+# Temporary files
+*.tmp
+*.temp
+.claude/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
