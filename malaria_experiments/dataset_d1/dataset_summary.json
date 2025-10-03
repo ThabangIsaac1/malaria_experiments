@@ -1,0 +1,103 @@
+{
+  "dataset_info": {
+    "name": "D1_Malaria_Dataset_Processed",
+    "original_source": "Davidson et al. - PlasmoCount",
+    "processing_date": "2025-09-15T18:05:16.677619",
+    "excluded_images": [
+      "5a745ec3-78c8-4049-980e-19401e0bdfe1.tif",
+      "0b1cb0e7-281e-4981-b5a4-e6ebb004bd70.tif",
+      "c9069f01-13d3-4302-9d46-2ffdae49c9a0.tif",
+      "e25a342e-fe7c-407c-82a8-db0a0d0637fa.tif",
+      "d6016ea2-4ba5-4fb4-b78c-80d153b6bb02.tif",
+      "3e1f4f04-01f4-4ea0-be9f-f30ceb4557cf.tif"
+    ],
+    "total_valid_images": 398
+  },
+  "levels": {
+    "binary": {
+      "train": {
+        "images": 225,
+        "objects": 21954,
+        "class_distribution": {
+          "uninfected": 20368,
+          "infected": 1586
+        }
+      },
+      "val": {
+        "images": 57,
+        "objects": 5456,
+        "class_distribution": {
+          "uninfected": 5059,
+          "infected": 397
+        }
+      },
+      "test": {
+        "images": 116,
+        "objects": 8654,
+        "class_distribution": {
+          "uninfected": 8260,
+          "infected": 394
+        }
+      }
+    },
+    "species": {
+      "train": {
+        "images": 225,
+        "objects": 21954,
+        "class_distribution": {
+          "uninfected": 20368,
+          "p_falciparum": 1586
+        }
+      },
+      "val": {
+        "images": 57,
+        "objects": 5456,
+        "class_distribution": {
+          "uninfected": 5059,
+          "p_falciparum": 397
+        }
+      },
+      "test": {
+        "images": 116,
+        "objects": 8654,
+        "class_distribution": {
+          "uninfected": 8260,
+          "p_falciparum": 394
+        }
+      }
+    },
+    "staging": {
+      "train": {
+        "images": 225,
+        "objects": 20956,
+        "class_distribution": {
+          "uninfected": 20167,
+          "ring": 375,
+          "schizont": 153,
+          "trophozoite": 261
+        }
+      },
+      "val": {
+        "images": 57,
+        "objects": 5490,
+        "class_distribution": {
+          "uninfected": 5260,
+          "trophozoite": 78,
+          "ring": 115,
+          "schizont": 37
+        }
+      },
+      "test": {
+        "images": 116,
+        "objects": 8604,
+        "class_distribution": {
+          "uninfected": 8260,
+          "schizont": 126,
+          "ring": 82,
+          "trophozoite": 136
+        }
+      }
+    }
+  },
+  "splits": {}
+}

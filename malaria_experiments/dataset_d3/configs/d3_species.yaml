@@ -1,0 +1,11 @@
+names:
+  0: uninfected
+  1: p_falciparum
+  2: p_ovale
+  3: p_malariae
+  4: p_vivax
+nc: 5
+path: /Users/thabangisaka/Downloads/thabang_phd/Experiments/Year 3 Experiments/malaria_experiments/dataset_d3
+test: yolo_format/species/test/images
+train: yolo_format/species/train/images
+val: yolo_format/species/val/images

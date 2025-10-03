@@ -6,15 +6,24 @@ from tqdm import tqdm
 import shutil
 
 def coco_to_yolo_bbox(coco_bbox, img_width, img_height):
-    """Convert COCO bbox to YOLO format"""
+    """Convert COCO bbox to YOLO format with safety clipping"""
     x, y, w, h = coco_bbox
+    
+    # Convert to YOLO format
     x_center = (x + w/2) / img_width
     y_center = (y + h/2) / img_height
     width = w / img_width
     height = h / img_height
+    
+    # SAFETY: Clip all values to [0,1] range to prevent training errors
+    x_center = max(0.0, min(1.0, x_center))
+    y_center = max(0.0, min(1.0, y_center))
+    width = max(0.0, min(1.0, width))
+    height = max(0.0, min(1.0, height))
+    
     return x_center, y_center, width, height
 
-def prepare_yolo_structure(dataset_name='d1', task='binary'):
+def prepare_yolo_structure(dataset_name='d3', task='binary'):
     """
     Prepare YOLO-compatible structure with symlinks
     Creates structure: dataset_dX/yolo_format/{task}/{split}/images & labels
@@ -76,22 +85,30 @@ def prepare_yolo_structure(dataset_name='d1', task='binary'):
                     img_annotations[img_id] = []
                 img_annotations[img_id].append(ann)
             
+            # Track conversion statistics
+            converted_count = 0
+            clipped_count = 0
+            
             # Process each image
             for img_info in tqdm(coco_data['images'], desc=f"Converting {split}"):
                 img_id = img_info['id']
                 img_filename = img_info['file_name']
                 img_width = img_info['width']
                 img_height = img_info['height']
-                
+
+                # Handle relative paths in JSON (e.g., "../../../images/file.png")
+                # Extract just the base filename
+                img_basename = Path(img_filename).name
+
                 # Create symlink for image if not exists
-                src_img = dataset_path / "images" / img_filename
-                dst_img = images_path / img_filename
+                src_img = dataset_path / "images" / img_basename
+                dst_img = images_path / img_basename
                 
                 if src_img.exists() and not dst_img.exists():
                     dst_img.symlink_to(src_img)
                 
                 # Create YOLO label file
-                txt_filename = Path(img_filename).stem + '.txt'
+                txt_filename = img_basename.replace('.png', '.txt').replace('.jpg', '.txt')
                 txt_path = labels_path / txt_filename
                 
                 # Write annotations
@@ -102,12 +119,23 @@ def prepare_yolo_structure(dataset_name='d1', task='binary'):
                             x_center, y_center, width, height = coco_to_yolo_bbox(
                                 ann['bbox'], img_width, img_height
                             )
+                            
+                            # Check if clipping occurred (for debugging)
+                            original_x_center = (ann['bbox'][0] + ann['bbox'][2]/2) / img_width
+                            original_y_center = (ann['bbox'][1] + ann['bbox'][3]/2) / img_height
+                            if (original_x_center != x_center or original_y_center != y_center):
+                                clipped_count += 1
+                            
                             f.write(f"{class_id} {x_center:.6f} {y_center:.6f} {width:.6f} {height:.6f}\n")
+                            converted_count += 1
                 else:
                     # Empty file for images without annotations
                     txt_path.touch()
             
             print(f"✅ Converted {split}: {len(list(labels_path.glob('*.txt')))} label files")
+            print(f"   Total annotations: {converted_count}")
+            if clipped_count > 0:
+                print(f"   ⚠️  Clipped coordinates: {clipped_count} (safety measure)")
         else:
             print(f"⚠️  No JSON found for {dataset_name}/{task}/{split}")
     

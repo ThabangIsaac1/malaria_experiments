@@ -1,0 +1,8 @@
+names:
+  0: uninfected
+  1: infected
+nc: 2
+path: /Users/thabangisaka/Downloads/thabang_phd/Experiments/Year 3 Experiments/malaria_experiments/dataset_d3
+test: yolo_format/binary/test/images
+train: yolo_format/binary/train/images
+val: yolo_format/binary/val/images

@@ -1,4 +1,4 @@
-# src/utils/visualizer.py
+# src/utils/visualizer.py - UPDATED VERSION
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from PIL import Image
@@ -7,11 +7,12 @@ from pathlib import Path
 import random
 
 class YOLOVisualizer:
-    """Modular visualizer that adapts to any task"""
+    """Modular visualizer that adapts to any task and handles dimension issues"""
     
-    def __init__(self, class_names):
+    def __init__(self, class_names, debug_mode=False):
         self.class_names = class_names
         self.colors = self._generate_colors(class_names)
+        self.debug_mode = debug_mode  # Add debug mode
         
         # Auto-detect minority classes (for prioritization)
         self.minority_classes = self._detect_minority_classes(class_names)
@@ -51,24 +52,45 @@ class YOLOVisualizer:
         return colors
     
     def load_yolo_annotations(self, img_path, label_path):
-        """Load image and its YOLO annotations"""
+        """Load image and its YOLO annotations with dimension validation"""
         img = Image.open(img_path)
         img_width, img_height = img.size
         
         boxes = []
+        misaligned_count = 0
+        
         if label_path.exists():
             with open(label_path, 'r') as f:
                 for line in f:
                     parts = line.strip().split()
                     if len(parts) >= 5:
                         class_id = int(parts[0])
-                        x_center = float(parts[1]) * img_width
-                        y_center = float(parts[2]) * img_height
-                        width = float(parts[3]) * img_width
-                        height = float(parts[4]) * img_height
+                        x_center_norm = float(parts[1])
+                        y_center_norm = float(parts[2])
+                        width_norm = float(parts[3])
+                        height_norm = float(parts[4])
+                        
+                        # Check if normalized values are valid
+                        if any(v < 0 or v > 1 for v in [x_center_norm, y_center_norm, width_norm, height_norm]):
+                            misaligned_count += 1
+                            if self.debug_mode:
+                                print(f"Warning: Invalid normalized values in {label_path.name}")
+                            continue
+                        
+                        # Convert to pixel coordinates using ACTUAL image dimensions
+                        x_center = x_center_norm * img_width
+                        y_center = y_center_norm * img_height
+                        width = width_norm * img_width
+                        height = height_norm * img_height
                         
                         x1 = x_center - width/2
                         y1 = y_center - height/2
+                        
+                        # Clip to image boundaries (safety check)
+                        x1 = max(0, min(x1, img_width))
+                        y1 = max(0, min(y1, img_height))
+                        width = min(width, img_width - x1)
+                        height = min(height, img_height - y1)
                         
                         boxes.append({
                             'class_id': class_id,
@@ -80,11 +102,19 @@ class YOLOVisualizer:
                             'is_minority': class_id in self.minority_classes
                         })
         
+        if self.debug_mode and misaligned_count > 0:
+            print(f"Skipped {misaligned_count} boxes with invalid coordinates")
+        
         return img, boxes
     
     def plot_image_with_boxes(self, ax, img, boxes, title=""):
         """Plot single image with bounding boxes"""
         ax.imshow(img)
+        
+        # Add image dimensions to title if in debug mode
+        if self.debug_mode:
+            title += f"\n[{img.width}x{img.height}]"
+        
         ax.set_title(title, fontsize=10, fontweight='bold')
         ax.axis('off')
         
@@ -147,8 +177,11 @@ class YOLOVisualizer:
         """Visualize samples from train, val, and test splits"""
         splits = ['train', 'val', 'test']
         
-        fig, axes = plt.subplots(len(splits), num_samples, figsize=(5*num_samples, 12))
-        if num_samples == 1:
+        # Reduce samples per row for better visibility
+        samples_per_split = min(num_samples, 3)  # Max 3 per row
+        
+        fig, axes = plt.subplots(len(splits), samples_per_split, figsize=(5*samples_per_split, 12))
+        if samples_per_split == 1:
             axes = axes.reshape(-1, 1)
         
         # Create informative title
@@ -166,7 +199,7 @@ class YOLOVisualizer:
             img_files = list(img_dir.glob('*.jpg')) + list(img_dir.glob('*.png'))
             
             if len(img_files) == 0:
-                for j in range(num_samples):
+                for j in range(samples_per_split):
                     axes[split_idx, j].text(0.5, 0.5, f"No images in {split}", 
                                            ha='center', va='center')
                     axes[split_idx, j].axis('off')
@@ -186,15 +219,22 @@ class YOLOVisualizer:
                                     break
                 
                 if minority_images:
-                    sample_files = random.sample(minority_images, min(num_samples, len(minority_images)))
+                    sample_files = random.sample(minority_images, min(samples_per_split, len(minority_images)))
                 else:
-                    sample_files = random.sample(img_files, min(num_samples, len(img_files)))
+                    sample_files = random.sample(img_files, min(samples_per_split, len(img_files)))
             else:
-                sample_files = random.sample(img_files, min(num_samples, len(img_files)))
+                sample_files = random.sample(img_files, min(samples_per_split, len(img_files)))
             
             for j, img_path in enumerate(sample_files):
                 label_path = lbl_dir / (img_path.stem + '.txt')
-                img, boxes = self.load_yolo_annotations(img_path, label_path)
+                
+                # Resolve symlinks to get actual image
+                if img_path.is_symlink():
+                    actual_img_path = img_path.resolve()
+                else:
+                    actual_img_path = img_path
+                    
+                img, boxes = self.load_yolo_annotations(actual_img_path, label_path)
                 
                 title = f"{split.upper()}: {img_path.name[:20]}..."
                 self.plot_image_with_boxes(axes[split_idx, j], img, boxes, title)

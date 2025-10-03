@@ -2,7 +2,7 @@
 import os
 from pathlib import Path
 
-def get_dataset_paths(dataset_name='d1', task='binary'):
+def get_dataset_paths(dataset_name='d3', task='binary'):
     """Get YOLO-formatted dataset paths"""
     
     # Check environment
@@ -17,7 +17,7 @@ def get_dataset_paths(dataset_name='d1', task='binary'):
     
     return yolo_path
 
-def verify_dataset(dataset_name='d1', task='binary'):
+def verify_dataset(dataset_name='d3', task='binary'):
     """Verify YOLO dataset structure"""
     yolo_path = get_dataset_paths(dataset_name, task)
     

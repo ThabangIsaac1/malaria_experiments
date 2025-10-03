@@ -6,11 +6,11 @@ class ExperimentConfig:
     """Configuration for experiments"""
     
     # Dataset
-    dataset: str = 'd1'  # 'd1', 'd2', or 'd3'
+    dataset: str = 'd3'  # 'd1', 'd2', or 'd3'
     task: str = 'binary'  # 'binary', 'species', or 'staging'
     
     # Model
-    model_name: str = 'yolov8s'  # or 'yolov11s', 'rtdetr-r18'
+    model_name: str = 'yolo11s'  # or 'yolov11s', 'rtdetr-r18'
     
     # Training
     epochs: int = 200  # Start with 50 for testing

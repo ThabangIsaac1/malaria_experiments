@@ -138,38 +138,6 @@ class NoWeightsStrategy(TrainingStrategy):
         print(f"Expected: High accuracy but poor minority recall")
 
 
-class WeightedBaselineStrategy(TrainingStrategy):
-    """Phase 2: Standard practice - inverse frequency class weights"""
-    
-    def get_loss_function(self):
-        return None
-    
-    def get_training_params(self) -> Dict[str, Any]:
-        """Apply class weights through modified loss weights"""
-        # Calculate the imbalance ratio
-        weight_ratio = float(self.class_weights.max() / self.class_weights.min())
-        
-        # Scale classification loss by imbalance
-        # This effectively applies class weighting in YOLO
-        cls_weight = 0.5 * np.sqrt(weight_ratio)  # Square root to prevent over-weighting
-        
-        return {
-            'cls': min(cls_weight, 2.0),  # Cap at 2.0 to prevent instability
-            'box': 7.5,
-            'dfl': 1.5
-        }
-    
-    def get_strategy_name(self) -> str:
-        return "weighted_baseline"
-    
-    def get_hyperparameter_adjustments(self) -> Dict[str, Any]:
-        """Slight adjustments for weighted training"""
-        return {
-            'patience': 25,  # More patience for weighted loss
-            'warmup_epochs': 3
-        }
-
-
 class QGFLStrategy(TrainingStrategy):
     """Phase 3: Query-Guided Focal Loss - Full implementation"""
     
@@ -276,21 +244,19 @@ class QGFLStrategy(TrainingStrategy):
         return True
 
 
-def create_training_strategy(strategy_name: str, 
-                           config, 
+def create_training_strategy(strategy_name: str,
+                           config,
                            class_distribution: Dict[str, int]) -> TrainingStrategy:
     """
     Factory function to create appropriate training strategy
-    
+
     Available strategies:
     - 'no_weights': True baseline without class weighting
-    - 'weighted_baseline': Standard practice with inverse frequency weights
-    - 'qgfl': Query-Guided Focal Loss (full implementation)
+    - 'qgfl': Query-Guided Focal Loss (full implementation - NOT YET PROPERLY IMPLEMENTED)
     """
-    
+
     strategies = {
         'no_weights': NoWeightsStrategy,
-        'weighted_baseline': WeightedBaselineStrategy,
         'qgfl': QGFLStrategy
     }
     

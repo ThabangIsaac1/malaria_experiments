@@ -1,0 +1,45 @@
+{
+  "dataset_path": "/Users/thabangisaka/Downloads/thabang_phd/Experiments/Year 3 Experiments/malaria_experiments/dataset_d1",
+  "images_path": "/Users/thabangisaka/Downloads/thabang_phd/Experiments/Year 3 Experiments/malaria_experiments/dataset_d1/images",
+  "levels": {
+    "binary": {
+      "classes": [
+        "uninfected",
+        "infected"
+      ],
+      "num_classes": 2,
+      "splits": {
+        "train": "/Users/thabangisaka/Downloads/thabang_phd/Experiments/Year 3 Experiments/malaria_experiments/dataset_d1/binary/train/annotations_train.json",
+        "val": "/Users/thabangisaka/Downloads/thabang_phd/Experiments/Year 3 Experiments/malaria_experiments/dataset_d1/binary/val/annotations_val.json",
+        "test": "/Users/thabangisaka/Downloads/thabang_phd/Experiments/Year 3 Experiments/malaria_experiments/dataset_d1/binary/test/annotations_test.json"
+      }
+    },
+    "species": {
+      "classes": [
+        "uninfected",
+        "p_falciparum"
+      ],
+      "num_classes": 2,
+      "splits": {
+        "train": "/Users/thabangisaka/Downloads/thabang_phd/Experiments/Year 3 Experiments/malaria_experiments/dataset_d1/species/train/annotations_train.json",
+        "val": "/Users/thabangisaka/Downloads/thabang_phd/Experiments/Year 3 Experiments/malaria_experiments/dataset_d1/species/val/annotations_val.json",
+        "test": "/Users/thabangisaka/Downloads/thabang_phd/Experiments/Year 3 Experiments/malaria_experiments/dataset_d1/species/test/annotations_test.json"
+      }
+    },
+    "staging": {
+      "classes": [
+        "uninfected",
+        "ring",
+        "trophozoite",
+        "schizont",
+        "gametocyte"
+      ],
+      "num_classes": 5,
+      "splits": {
+        "train": "/Users/thabangisaka/Downloads/thabang_phd/Experiments/Year 3 Experiments/malaria_experiments/dataset_d1/staging/train/annotations_train.json",
+        "val": "/Users/thabangisaka/Downloads/thabang_phd/Experiments/Year 3 Experiments/malaria_experiments/dataset_d1/staging/val/annotations_val.json",
+        "test": "/Users/thabangisaka/Downloads/thabang_phd/Experiments/Year 3 Experiments/malaria_experiments/dataset_d1/staging/test/annotations_test.json"
+      }
+    }
+  }
+}
