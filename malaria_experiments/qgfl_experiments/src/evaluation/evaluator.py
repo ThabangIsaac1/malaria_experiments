@@ -16,13 +16,14 @@ import torch
 class ComprehensiveEvaluator:
     """Complete evaluation suite matching all paper requirements"""
     
-    def __init__(self, model_path, dataset_path, config, output_dir="evaluation_results"):
+    def __init__(self, model_path, dataset_path, config, output_dir="evaluation_results", yaml_path=None):
         self.model = YOLO(model_path) if isinstance(model_path, (str, Path)) else model_path
         self.dataset_path = Path(dataset_path)
         self.config = config
+        self.yaml_path = Path(yaml_path) if yaml_path else None
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        
+
         self.class_names = config.get_class_names()
         self.num_classes = len(self.class_names)
         
@@ -86,8 +87,9 @@ class ComprehensiveEvaluator:
     
     def compute_global_metrics(self, split):
         """Compute overall metrics using YOLO validation"""
-        yaml_path = Path(f'../configs/data_yamls/{self.config.dataset}_{self.config.task}.yaml')
-        
+        # Use provided yaml_path or fallback to relative path
+        yaml_path = self.yaml_path if self.yaml_path else Path(f'../configs/data_yamls/{self.config.dataset}_{self.config.task}.yaml')
+
         metrics = self.model.val(
             data=str(yaml_path),
             split=split,
