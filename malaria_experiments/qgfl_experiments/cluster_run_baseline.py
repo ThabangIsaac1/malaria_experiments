@@ -482,8 +482,10 @@ train_args = {
     'imgsz': config.imgsz,
     'batch': config.batch_size,
     'name': experiment_name,
-    'project': '../runs/detect',  # ADDED: Controls where YOLO saves to avoid nested folders
+    'project': str(script_dir.parent / 'runs' / 'detect'),  # Portable path: malaria_qgfl_experiments/runs/detect
     'device': 'cpu' if not torch.cuda.is_available() else None,
+    # CRITICAL: Disable YOLO's internal W&B to avoid conflict with our custom logging
+    'plots': False,  # We handle plotting manually later
     'patience': getattr(config, 'patience', 20),
     'save': True,
     'save_period': getattr(config, 'save_period', 10),
@@ -574,10 +576,20 @@ results_csv = Path(results.save_dir) / 'results.csv'
 
 # LOG COMPREHENSIVE TRAINING DATA TO W&B
 if config.use_wandb and results_csv.exists():
+    # Re-initialize W&B if YOLO closed it
+    if not wandb.run:
+        print("Re-initializing W&B session (YOLO closed it)...")
+        run = wandb.init(
+            project=config.wandb_project,
+            name=experiment_name,
+            id=run.id if 'run' in globals() else None,  # Resume same run
+            resume="allow"
+        )
+
     print("\n" + "="*50)
     print("LOGGING TRAINING METRICS TO W&B")
     print("="*50)
-    
+
     # 1. Read and log training curves
     df = pd.read_csv(results_csv)
     df.columns = [col.strip() for col in df.columns]  # Clean column names
@@ -688,7 +700,8 @@ evaluator = ComprehensiveEvaluator(
     model_path=best_model_path,
     dataset_path=yolo_path,
     config=config,
-    output_dir=Path('../results') / experiment_name / 'evaluation'
+    output_dir=script_dir.parent / 'results' / experiment_name / 'evaluation',
+    yaml_path=yaml_file  # Pass the yaml_file we already have
 )
 
 print(f"✓ Model loaded: {config.model_name}")
