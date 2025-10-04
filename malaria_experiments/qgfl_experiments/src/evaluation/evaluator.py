@@ -667,7 +667,12 @@ class ComprehensiveEvaluator:
                     for gt_idx, gt in enumerate(gt_boxes):
                         if gt['matched']:
                             continue
-                        
+
+                        # CRITICAL FIX: Only match same class (like per-class metrics)
+                        # This ensures confusion matrix diagonal matches per-class TP counts
+                        if gt['class_id'] != pred_class:
+                            continue
+
                         iou = self._compute_iou(pred_box, gt['box'])
                         if iou > best_iou:
                             best_iou = iou
