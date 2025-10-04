@@ -21,7 +21,7 @@ parser.add_argument('--dataset', type=str, required=True,
                     choices=['d1', 'd2', 'd3'],
                     help='Dataset to use: d1 (P.falciparum, 398), d2 (P.vivax, 1328), d3 (Multi-species, 28905)')
 parser.add_argument('--model', type=str, required=True,
-                    choices=['yolov8s', 'yolov11s'],
+                    choices=['yolov8s', 'yolov11s', 'rtdetr'],
                     help='Model architecture to train')
 
 # Optional arguments
@@ -241,13 +241,15 @@ print("="*60)
 
 
 # Cell 5: Initialize Model
-from ultralytics import YOLO
+from ultralytics import YOLO, RTDETR
 
 # Download/load pretrained weights
 if config.model_name == 'yolov8s':
     model = YOLO('yolov8s.pt')
-elif config.model_name == 'yolo11s':
-    model = YOLO('yolo11s.pt')  
+elif config.model_name in ['yolo11s', 'yolov11s']:
+    model = YOLO('yolo11s.pt')
+elif config.model_name == 'rtdetr':
+    model = RTDETR('rtdetr-l.pt')
 else:
     raise ValueError(f"Model {config.model_name} not implemented yet")
 
@@ -343,7 +345,7 @@ else:
 
 
 # Cell 8: Complete Training with Post-Training W&B Logging
-from ultralytics import YOLO
+from ultralytics import YOLO, RTDETR
 import time
 from pathlib import Path
 from collections import defaultdict
@@ -433,7 +435,20 @@ training_start_time = time.time()
 
 # Load model
 print(f"\nLoading model: {config.model_name}.pt")
-model = YOLO(f'{config.model_name}.pt')
+# Map model names to actual weight files
+model_weights = {
+    'yolov8s': 'yolov8s.pt',
+    'yolov11s': 'yolo11s.pt',
+    'yolo11s': 'yolo11s.pt',
+    'rtdetr': 'rtdetr-l.pt'
+}
+weight_file = model_weights.get(config.model_name, f'{config.model_name}.pt')
+
+# Initialize appropriate model class
+if config.model_name == 'rtdetr':
+    model = RTDETR(weight_file)
+else:
+    model = YOLO(weight_file)
 
 # Get model info for W&B
 if config.use_wandb:
@@ -458,7 +473,7 @@ for param, value in hyperparameter_adjustments.items():
 
 # Prepare training arguments (NO W&B project parameter)
 # Cell 8: Complete Training with Post-Training W&B Logging (UPDATED)
-from ultralytics import YOLO
+from ultralytics import YOLO, RTDETR
 import time
 from pathlib import Path
 from collections import defaultdict
@@ -924,6 +939,7 @@ axes[2].grid(axis='y', alpha=0.3)
 
 plt.tight_layout()
 save_path = Path('../results') / experiment_name / 'per_class_comparison.png'
+save_path.parent.mkdir(parents=True, exist_ok=True)  # Create directory if needed
 plt.savefig(save_path, dpi=300, bbox_inches='tight')
 plt.show()
 
@@ -1075,6 +1091,7 @@ if config.task == 'binary':
     
     plt.tight_layout()
     save_path = Path('../results') / experiment_name / 'recall_variability.png'
+    save_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.show()
     
@@ -1193,6 +1210,7 @@ if config.task == 'binary':
     
     plt.tight_layout()
     save_path = Path('../results') / experiment_name / 'stratified_analysis.png'
+    save_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.show()
     
@@ -1527,6 +1545,7 @@ fig.suptitle('Precision-Recall Analysis Dashboard', fontsize=16, fontweight='bol
 
 plt.tight_layout(rect=[0, 0.02, 1, 0.96])
 save_path = Path('../results') / experiment_name / 'pr_curves_comprehensive.png'
+save_path.parent.mkdir(parents=True, exist_ok=True)
 plt.savefig(save_path, dpi=300, bbox_inches='tight', facecolor='white')
 plt.show()
 
@@ -1922,6 +1941,7 @@ if infected_total_gt > 0:
 
 plt.tight_layout()
 save_path = Path('../results') / experiment_name / 'tide_error_analysis.png'
+save_path.parent.mkdir(parents=True, exist_ok=True)
 plt.savefig(save_path, dpi=300, bbox_inches='tight')
 plt.show()
 
@@ -2231,6 +2251,7 @@ output_folder = save_all_predictions(evaluator, split='test')
 print("\nVisualizing sample predictions...")
 fig = visualize_sample_predictions(evaluator, split='test', num_samples=6)
 save_path = Path('../results') / experiment_name / 'sample_predictions_grid.png'
+save_path.parent.mkdir(parents=True, exist_ok=True)
 plt.savefig(save_path, dpi=300, bbox_inches='tight')
 plt.show()
 
