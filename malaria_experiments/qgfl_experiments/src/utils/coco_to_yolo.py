@@ -23,13 +23,15 @@ def coco_to_yolo_bbox(coco_bbox, img_width, img_height):
     
     return x_center, y_center, width, height
 
-def prepare_yolo_structure(dataset_name='d3', task='binary'):
+def prepare_yolo_structure(dataset_name='d3', task='binary', base_path=None):
     """
     Prepare YOLO-compatible structure with symlinks
     Creates structure: dataset_dX/yolo_format/{task}/{split}/images & labels
     """
-    base_path = Path("/Users/thabangisaka/Downloads/thabang_phd/Experiments/Year 3 Experiments/malaria_experiments")
-    dataset_path = base_path / f"dataset_{dataset_name}"
+    if base_path is None:
+        raise ValueError("base_path is required. Pass it from get_dataset_paths()")
+
+    dataset_path = Path(base_path) / f"dataset_{dataset_name}"
     
     # Create YOLO format directory
     yolo_path = dataset_path / "yolo_format" / task
@@ -141,11 +143,14 @@ def prepare_yolo_structure(dataset_name='d3', task='binary'):
     
     return yolo_path
 
-def get_or_create_yolo_format(dataset_name='d1', task='binary'):
+def get_or_create_yolo_format(dataset_name='d1', task='binary', base_path=None):
     """Get YOLO format path, create if doesn't exist"""
-    base_path = Path("/Users/thabangisaka/Downloads/thabang_phd/Experiments/Year 3 Experiments/malaria_experiments")
+    if base_path is None:
+        raise ValueError("base_path is required. Pass it from get_dataset_paths()")
+
+    base_path = Path(base_path)
     yolo_path = base_path / f"dataset_{dataset_name}" / "yolo_format" / task
-    
+
     # Check if already converted
     needs_conversion = False
     for split in ['train', 'val', 'test']:
@@ -153,11 +158,11 @@ def get_or_create_yolo_format(dataset_name='d1', task='binary'):
         if not labels_path.exists() or len(list(labels_path.glob('*.txt'))) == 0:
             needs_conversion = True
             break
-    
+
     if needs_conversion:
         print(f"Converting {dataset_name}/{task} to YOLO format...")
-        yolo_path = prepare_yolo_structure(dataset_name, task)
+        yolo_path = prepare_yolo_structure(dataset_name, task, base_path)
     else:
         print(f"YOLO format already exists for {dataset_name}/{task}")
-    
+
     return yolo_path
