@@ -36,6 +36,15 @@ parser.add_argument('--use-wandb', action='store_true', default=True,
                     help='Enable Weights & Biases logging')
 parser.add_argument('--results-dir', type=str, default='../results',
                     help='Base directory for saving results')
+parser.add_argument('--loss-type', type=str, default='qgfl',
+                    choices=['baseline', 'qgfl'],
+                    help='Loss function type: baseline (BCE/VarifocalLoss) or qgfl (Quality-Guided Focal Loss)')
+parser.add_argument('--gamma-infected', type=float, default=8.0,
+                    help='QGFL gamma for infected class (default: 8.0 from paper)')
+parser.add_argument('--gamma-uninfected', type=float, default=4.0,
+                    help='QGFL gamma for uninfected class (default: 4.0 from paper)')
+parser.add_argument('--qgfl-debug', action='store_true',
+                    help='Enable QGFL debug logging')
 
 args = parser.parse_args()
 
@@ -45,6 +54,11 @@ print("=" * 70)
 print(f"Dataset: {args.dataset.upper()}")
 print(f"Model: {args.model}")
 print(f"Task: {args.task}")
+print(f"Loss Type: {args.loss_type.upper()}")
+if args.loss_type == 'qgfl':
+    print(f"QGFL Gamma (infected): {args.gamma_infected}")
+    print(f"QGFL Gamma (uninfected): {args.gamma_uninfected}")
+    print(f"QGFL Debug: {args.qgfl_debug}")
 print(f"Epochs: {args.epochs}")
 print(f"Batch Size: {args.batch_size}")
 print(f"W&B Logging: {args.use_wandb}")
@@ -86,6 +100,181 @@ plt.rcParams['font.family'] = 'sans-serif'
 sns.set_style("whitegrid")
 
 from src.evaluation.evaluator import ComprehensiveEvaluator
+
+# ============================================================================
+# QGFL LOSS INTEGRATION
+# ============================================================================
+if args.loss_type == 'qgfl':
+    print("\n" + "=" * 70)
+    print("INTEGRATING QGFL LOSS VIA MONKEY-PATCHING")
+    print("=" * 70)
+
+    from src.losses.qgfl_yolo import QGFLYOLOLoss
+    from src.losses.qgfl_rtdetr import QGFLRTDETRLoss
+    import ultralytics.utils.loss as yolo_loss_module
+
+    # Initialize QGFL losses with configurable parameters
+    qgfl_yolo = QGFLYOLOLoss(
+        nc=2,
+        infected_alpha=0.9,
+        uninfected_alpha=0.1,
+        infected_gamma=args.gamma_infected,
+        uninfected_gamma=args.gamma_uninfected,
+        difficulty_threshold=0.925,
+        quality_margin=0.5,
+        quality_factor=2.0,
+        uiou_start=2.0,
+        uiou_end=0.5,
+        debug=args.qgfl_debug
+    )
+
+    qgfl_rtdetr = QGFLRTDETRLoss(
+        nc=2,
+        infected_alpha=0.9,
+        uninfected_alpha=0.1,
+        infected_gamma=args.gamma_infected,
+        uninfected_gamma=args.gamma_uninfected,
+        difficulty_threshold=0.925,
+        quality_margin=0.5,
+        quality_factor=2.0,
+        uiou_start=2.0,
+        uiou_end=0.5,
+        debug=args.qgfl_debug
+    )
+
+    # Store original v8DetectionLoss __call__ method
+    _original_v8loss_call = yolo_loss_module.v8DetectionLoss.__call__
+
+    # Store reference to QGFL for use in patched method
+    _qgfl_yolo_loss = qgfl_yolo
+    _qgfl_args_epochs = args.epochs
+
+    # Monkey-patch the __call__ method directly (pickle-safe)
+    def qgfl_forward(self, preds, batch):
+        """QGFL-enhanced forward pass (replaces BCE with QGFL)"""
+        # Call original to get all the target preparation
+        loss_items = torch.zeros(3, device=self.device)
+        feats = preds[1] if isinstance(preds, tuple) else preds
+        pred_distri, pred_scores = torch.cat([xi.view(feats[0].shape[0], self.no, -1) for xi in feats], 2).split(
+            (self.reg_max * 4, self.nc), 1
+        )
+
+        # Get targets (same as original)
+        pred_scores = pred_scores.permute(0, 2, 1).contiguous()
+        pred_distri = pred_distri.permute(0, 2, 1).contiguous()
+
+        dtype = pred_scores.dtype
+        batch_size = pred_scores.shape[0]
+        imgsz = torch.tensor(feats[0].shape[2:], device=self.device, dtype=dtype) * self.stride[0]
+        anchor_points, stride_tensor = yolo_loss_module.make_anchors(feats, self.stride, 0.5)
+
+        # Targets
+        targets = torch.cat((batch["batch_idx"].view(-1, 1), batch["cls"].view(-1, 1), batch["bboxes"]), 1)
+        targets = self.preprocess(targets.to(self.device), batch_size, scale_tensor=imgsz[[1, 0, 1, 0]])
+        gt_labels, gt_bboxes = targets.split((1, 4), 2)
+        mask_gt = gt_bboxes.sum(2, keepdim=True).gt_(0.0)
+
+        # Get target assignment
+        pred_bboxes = self.bbox_decode(anchor_points, pred_distri)
+        _, target_bboxes, target_scores, fg_mask, _ = self.assigner(
+            pred_scores.detach().sigmoid(),
+            (pred_bboxes.detach() * stride_tensor).type(gt_bboxes.dtype),
+            anchor_points * stride_tensor,
+            gt_labels,
+            gt_bboxes,
+            mask_gt,
+        )
+
+        target_scores_sum = max(target_scores.sum(), 1)
+
+        # QGFL Classification loss (REPLACEMENT for BCE at line 247)
+        loss_items[1] = _qgfl_yolo_loss(
+            pred_scores=pred_scores,
+            target_scores=target_scores.to(dtype),
+            current_epoch=getattr(self, '_current_epoch', 0),
+            total_epochs=_qgfl_args_epochs
+        ) / target_scores_sum
+
+        # Bbox + DFL loss (unchanged - computed together)
+        if fg_mask.sum():
+            target_bboxes /= stride_tensor
+            loss_items[0], loss_items[2] = self.bbox_loss(
+                pred_distri, pred_bboxes, anchor_points, target_bboxes, target_scores, target_scores_sum, fg_mask
+            )
+
+        loss_items[0] *= self.hyp.box
+        loss_items[1] *= self.hyp.cls
+        loss_items[2] *= self.hyp.dfl
+
+        return loss_items.sum() * batch_size, loss_items.detach()
+
+    # Monkey-patch YOLO loss (keeps original class, pickle-safe)
+    yolo_loss_module.v8DetectionLoss.__call__ = qgfl_forward
+
+    print(f"[QGFL] Patched ultralytics.utils.loss.v8DetectionLoss with QGFL")
+
+    # ========================================================================
+    # RT-DETR QGFL PATCHING
+    # ========================================================================
+    # RT-DETR uses VarifocalLoss in ultralytics/models/utils/loss.py
+    # We need to patch the RTDETRDetectionLoss class
+    try:
+        import ultralytics.models.utils.loss as rtdetr_loss_module
+
+        # Store reference to RT-DETR QGFL
+        _qgfl_rtdetr_loss = qgfl_rtdetr
+
+        # Check if RTDETRDetectionLoss exists
+        if hasattr(rtdetr_loss_module, 'RTDETRDetectionLoss'):
+            # Monkey-patch RT-DETR loss forward
+            def rtdetr_qgfl_forward(self, preds, batch, dn_bboxes=None, dn_scores=None, dn_meta=None):
+                """RT-DETR QGFL-enhanced forward pass"""
+                # Get predictions
+                pred_bboxes, pred_scores = preds  # RT-DETR outputs
+
+                # Get targets and perform matching (Hungarian algorithm)
+                # This calls the original matcher to get matched indices
+                # We'll use the original forward but replace the classification loss
+
+                # Call parent forward to get all components
+                # Then we'll extract and replace only the classification loss
+                # For now, use simplified approach - directly compute QGFL on scores
+
+                # Get batch info
+                batch_size = pred_scores.shape[0]
+                num_queries = pred_scores.shape[1]
+
+                # Match predictions to GT using Hungarian matcher
+                # (This is complex - for now, keep original matching logic)
+                # TODO: Full integration requires understanding RT-DETR's matcher
+
+                # Simplified: Apply QGFL to classification scores after matching
+                # This requires accessing the matcher output which is internal
+
+                # For now, raise NotImplementedError to signal this needs more work
+                raise NotImplementedError(
+                    "RT-DETR QGFL integration requires deeper understanding of "
+                    "RT-DETR's Hungarian matcher and loss computation. "
+                    "Use YOLO models for QGFL experiments for now."
+                )
+
+            # Don't patch yet - not fully implemented
+            # rtdetr_loss_module.RTDETRDetectionLoss.forward = rtdetr_qgfl_forward
+
+            print(f"[QGFL] RT-DETR loss integration: NOT YET IMPLEMENTED")
+            print(f"[QGFL] Use --model yolov8s or --model yolov11s for QGFL experiments")
+        else:
+            print(f"[QGFL] RT-DETR loss class not found - may not be needed for current ultralytics version")
+
+    except ImportError as e:
+        print(f"[QGFL] Could not import RT-DETR loss module: {e}")
+        print(f"[QGFL] RT-DETR QGFL support not available")
+
+    print(f"[QGFL] YOLO Parameters: α=[0.9, 0.1], γ=[{args.gamma_infected}, {args.gamma_uninfected}], threshold=0.925")
+    print(f"[QGFL] Debug mode: {args.qgfl_debug}")
+    print("=" * 70 + "\n")
+else:
+    print(f"\n[BASELINE] Using default ultralytics loss (BCE for YOLO, VarifocalLoss for RT-DETR)\n")
 
 # ============================================================================
 # REPRODUCIBILITY
@@ -412,22 +601,28 @@ strategy_params = strategy.get_training_params()
 hyperparameter_adjustments = strategy.get_hyperparameter_adjustments()
 
 # Update experiment name
-experiment_name = f"laptop_{config.model_name}_{config.dataset}_{config.task}_{strategy.get_strategy_name()}"
+if args.loss_type == 'qgfl':
+    # For QGFL, use simplified naming without strategy suffix
+    experiment_name = f"laptop_{config.model_name}_{config.dataset}_{config.task}_qgfl"
+else:
+    # For baseline, include strategy
+    experiment_name = f"laptop_{config.model_name}_{config.dataset}_{config.task}_{strategy.get_strategy_name()}"
 print(f"\nExperiment Name: {experiment_name}")
 
 # Update W&B config if active
 if config.use_wandb:
     if not hasattr(wandb, 'run') or wandb.run is None:
         raise RuntimeError("W&B not initialized. Run Cell 7 first")
-    
+
     wandb.config.update({
         'training_strategy': strategy.get_strategy_name(),
+        'loss_type': args.loss_type,
         'class_distribution': class_distribution,
         'minority_classes': [config.get_class_names()[i] for i in strategy.minority_classes],
         'class_weights': strategy.class_weights.tolist(),
         'total_training_annotations': total_annotations
     })
-    
+
     wandb.run.name = experiment_name
 
 # Track training start time
@@ -498,7 +693,7 @@ train_args = {
     'batch': config.batch_size,
     'name': experiment_name,
     'project': str(script_dir.parent / 'runs' / 'detect'),  # Portable path: malaria_qgfl_experiments/runs/detect
-    'device': 'cpu',  # Force CPU for consistency with QGFL runs
+    'device': 'cpu',  # Force CPU for stability (MPS has memory issues with QGFL)
     # CRITICAL: Disable YOLO's internal W&B to avoid conflict with our custom logging
     'plots': False,  # We handle plotting manually later
     'patience': getattr(config, 'patience', 20),
@@ -555,7 +750,9 @@ train_args = {
 
 print(f"\nStarting training for {config.epochs} epochs...")
 print(f"Strategy: {strategy.get_strategy_name()}")
+print(f"Loss Type: {args.loss_type.upper()}")
 print(f"Loss weights - Box: {train_args['box']}, Cls: {train_args['cls']}, DFL: {train_args['dfl']}")
+
 print("\n" + "="*50)
 print("MONITOR CONSOLE OUTPUT FOR REAL-TIME PROGRESS")
 print("Metrics will be logged to W&B after completion")
