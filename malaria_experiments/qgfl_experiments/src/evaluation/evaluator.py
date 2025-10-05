@@ -98,11 +98,19 @@ class ComprehensiveEvaluator:
             verbose=False
         )
         
+        # Extract per-class mAP@50-95
+        per_class_map = {}
+        if hasattr(metrics.box, 'maps') and metrics.box.maps is not None:
+            for class_id, class_map in enumerate(metrics.box.maps):
+                if class_id < self.num_classes:
+                    per_class_map[self.class_names[class_id]] = float(class_map)
+
         return {
             'mAP50': float(metrics.box.map50),
             'mAP50-95': float(metrics.box.map),
             'precision': float(metrics.box.mp) if hasattr(metrics.box, 'mp') else 0,
             'recall': float(metrics.box.mr) if hasattr(metrics.box, 'mr') else 0,
+            'per_class_map': per_class_map  # Per-class mAP@50-95
         }
     
     def compute_per_class_metrics(self, split):
@@ -782,6 +790,9 @@ class ComprehensiveEvaluator:
             f.write("-"*50 + "\n")
             global_table = []
             for metric, value in results['global'].items():
+                # Skip per_class_map as it's a dict, not a scalar
+                if metric == 'per_class_map':
+                    continue
                 global_table.append([metric, f"{value:.4f}"])
             f.write(tabulate(global_table, headers=['Metric', 'Value'], tablefmt='grid'))
             f.write("\n\n")

@@ -2908,10 +2908,10 @@ if config.use_wandb:
                 metrics = val_results['per_class'][class_name]
                 prefix = f"charts/validation/{class_name.lower()}"
                 wandb.log({
-                    f'{prefix}/mAP50': metrics.get('mAP50', 0),
                     f'{prefix}/precision': metrics.get('precision', 0),
                     f'{prefix}/recall': metrics.get('recall', 0),
                     f'{prefix}/f1_score': metrics.get('f1_score', 0),
+                    f'{prefix}/mAP50_95': float(val_results.get('global', {}).get('per_class_map', {}).get(class_name, 0)),
                 })
     
     # 1.5 Per-Class Performance Charts - Test
@@ -2921,10 +2921,10 @@ if config.use_wandb:
                 metrics = test_results['per_class'][class_name]
                 prefix = f"charts/test/{class_name.lower()}"
                 wandb.log({
-                    f'{prefix}/mAP50': metrics.get('mAP50', 0),
                     f'{prefix}/precision': metrics.get('precision', 0),
                     f'{prefix}/recall': metrics.get('recall', 0),
                     f'{prefix}/f1_score': metrics.get('f1_score', 0),
+                    f'{prefix}/mAP50_95': float(test_results.get('global', {}).get('per_class_map', {}).get(class_name, 0)),
                 })
     
     # 1.6 Inference Performance
@@ -2947,10 +2947,10 @@ if config.use_wandb:
             m = val_results['per_class'][class_name]
             val_class_data.append({
                 'Class': class_name,
-                # 'mAP50': float(m.get('mAP50', 0)),  # FORCE FLOAT
                 'Precision': float(m.get('precision', 0)),
                 'Recall': float(m.get('recall', 0)),
                 'F1': float(m.get('f1_score', 0)),
+                'mAP50-95': float(val_results.get('global', {}).get('per_class_map', {}).get(class_name, 0)),
                 'Support': int(m.get('support', 0))
             })
     if val_class_data:
@@ -2963,11 +2963,11 @@ if config.use_wandb:
             m = test_results['per_class'][class_name]
             test_class_data.append({
                 'Class': class_name,
-                # 'mAP50': float(m.get('mAP50', 0)),  # FORCE FLOAT
                 'Precision': float(m.get('precision', 0)),
                 'Recall': float(m.get('recall', 0)),
                 'F1': float(m.get('f1_score', 0)),
                 'AP': float(test_results.get('pr_analysis', {}).get(class_name, {}).get('ap', 0)),
+                'mAP50-95': float(test_results.get('global', {}).get('per_class_map', {}).get(class_name, 0)),
                 'Support': int(m.get('support', 0)),
                 'TP': int(m.get('tp', 0)),
                 'FP': int(m.get('fp', 0)),
@@ -3106,6 +3106,7 @@ if 'errors_per_class' in test_results:
             pr_data.append({
                 'Class': class_name,
                 'AP': pr_stats.get('ap', 0),
+                'mAP50-95': float(test_results.get('global', {}).get('per_class_map', {}).get(class_name, 0)),
                 'Optimal_Threshold': pr_stats.get('optimal_threshold', 0),
                 'Precision_at_Optimal': pr_stats.get('precision_at_optimal', 0),
                 'Recall_at_Optimal': pr_stats.get('recall_at_optimal', 0),
