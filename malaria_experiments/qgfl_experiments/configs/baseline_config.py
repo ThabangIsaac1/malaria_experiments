@@ -38,9 +38,9 @@ class ExperimentConfig:
     save_period: int = 10
     patience: int = 20
     
-    # Evaluation  
-    conf: float = 0.5
-    iou: float = 0.5
+    # Evaluation (Guemas et al. methodology for fair comparison)
+    conf: float = 0.25  # Changed from 0.5 - lower threshold for better sensitivity
+    iou: float = 0.45   # Changed from 0.5 - domain-specific for malaria detection
     
     # W&B
     use_wandb: bool = True

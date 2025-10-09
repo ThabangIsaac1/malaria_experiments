@@ -37,7 +37,29 @@ parser.add_argument('--use-wandb', action='store_true', default=True,
 parser.add_argument('--results-dir', type=str, default='../results',
                     help='Base directory for saving results')
 
+# Hyperparameter arguments (for RT-DETR tuning)
+parser.add_argument('--optimizer', type=str, default=None,
+                    choices=['auto', 'SGD', 'Adam', 'AdamW', 'NAdam', 'RAdam'],
+                    help='Optimizer to use (default: None = auto-select based on model type)')
+parser.add_argument('--lr0', type=float, default=0.01,
+                    help='Initial learning rate')
+parser.add_argument('--lrf', type=float, default=0.01,
+                    help='Final learning rate factor (lr_final = lr0 * lrf)')
+parser.add_argument('--warmup-epochs', type=float, default=3.0,
+                    help='Warmup epochs (can be fractional)')
+parser.add_argument('--cls', type=float, default=0.5,
+                    help='Classification loss weight')
+parser.add_argument('--box', type=float, default=7.5,
+                    help='Box loss weight')
+
 args = parser.parse_args()
+
+# Auto-select optimizer based on model type if not specified
+if args.optimizer is None:
+    if 'rtdetr' in args.model.lower() or 'rt-detr' in args.model.lower():
+        args.optimizer = 'auto'  # Let Ultralytics choose AdamW for RT-DETR
+    else:
+        args.optimizer = 'SGD'  # Explicit SGD for YOLO to preserve our hyperparameters
 
 print("=" * 70)
 print("QGFL MALARIA DETECTION - CLUSTER TRAINING")
@@ -288,7 +310,7 @@ if config.use_wandb:
         'epochs': config.epochs,
         'batch_size': config.batch_size,
         'learning_rate': config.lr0,
-        'optimizer': config.optimizer,
+        'optimizer': args.optimizer,  # Use args.optimizer ('auto') not config default
         'momentum': config.momentum,
         'weight_decay': config.weight_decay,
         
@@ -464,6 +486,34 @@ if config.use_wandb:
     except:
         pass
 
+    # Log hyperparameters (especially important for RT-DETR tuning)
+    wandb.config.update({
+        'hyperparams/optimizer': args.optimizer,
+        'hyperparams/lr0': args.lr0,
+        'hyperparams/lrf': args.lrf,
+        'hyperparams/warmup_epochs': args.warmup_epochs,
+        'hyperparams/cls_weight': args.cls,
+        'hyperparams/box_weight': args.box,
+        'hyperparams/batch_size': args.batch_size
+    })
+
+    # Log evaluation thresholds (Guemas et al. methodology - critical for reproducibility)
+    wandb.config.update({
+        'evaluation/conf_threshold': config.conf,
+        'evaluation/iou_threshold': config.iou,
+        'evaluation/agnostic_nms': True  # Class-agnostic NMS (Guemas methodology)
+    })
+
+    print(f"\n✓ Hyperparameters logged to W&B:")
+    print(f"  - Optimizer: {args.optimizer}")
+    print(f"  - Learning rate: {args.lr0} → {args.lr0 * args.lrf}")
+    print(f"  - Warmup epochs: {args.warmup_epochs}")
+    print(f"  - Loss weights: cls={args.cls}, box={args.box}")
+    print(f"\n✓ Evaluation thresholds logged to W&B:")
+    print(f"  - Confidence threshold: {config.conf}")
+    print(f"  - IoU threshold: {config.iou}")
+    print(f"  - Agnostic NMS: True")
+
 # Apply hyperparameter adjustments
 for param, value in hyperparameter_adjustments.items():
     if hasattr(config, param):
@@ -498,7 +548,7 @@ train_args = {
     'batch': config.batch_size,
     'name': experiment_name,
     'project': str(script_dir.parent / 'runs' / 'detect'),  # Portable path: malaria_qgfl_experiments/runs/detect
-    'device': 'cpu',  # Force CPU for consistency with QGFL runs
+    'device': 'cuda' if torch.cuda.is_available() else 'cpu',  # Auto-detect GPU
     # CRITICAL: Disable YOLO's internal W&B to avoid conflict with our custom logging
     'plots': False,  # We handle plotting manually later
     'patience': getattr(config, 'patience', 20),
@@ -514,18 +564,18 @@ train_args = {
     'cos_lr': getattr(config, 'cos_lr', False),
     'resume': getattr(config, 'resume', False),
     
-    # [Rest of parameters remain the same]
-    'optimizer': getattr(config, 'optimizer', 'SGD'),
-    'lr0': getattr(config, 'lr0', 0.005),
-    'lrf': getattr(config, 'lrf', 0.01),
+    # [Hyperparameters - now configurable via CLI for RT-DETR tuning]
+    'optimizer': args.optimizer,  # CLI override (default: 'auto')
+    'lr0': args.lr0,  # CLI override (default: 0.01)
+    'lrf': args.lrf,  # CLI override (default: 0.01)
     'momentum': getattr(config, 'momentum', 0.95),
     'weight_decay': getattr(config, 'weight_decay', 0.0005),
-    'warmup_epochs': getattr(config, 'warmup_epochs', 3.0),
+    'warmup_epochs': args.warmup_epochs,  # CLI override (default: 3.0)
     'warmup_momentum': getattr(config, 'warmup_momentum', 0.8),
     'warmup_bias_lr': getattr(config, 'warmup_bias_lr', 0.1),
-    
-    'box': strategy_params.get('box', 7.5),
-    'cls': strategy_params.get('cls', 0.5),
+
+    'box': args.box,  # CLI override (default: 7.5)
+    'cls': args.cls,  # CLI override (default: 0.5)
     'dfl': strategy_params.get('dfl', 1.5),
     
     'hsv_h': getattr(config, 'hsv_h', 0.015),
@@ -827,7 +877,11 @@ print(f"Using {SAMPLE_SIZE} images for inference timing\n")
 inference_results = {}
 batch_sizes = [1, 8, 16, 32] if torch.cuda.is_available() else [1, 4, 8]
 
-model_eval = YOLO(best_model_path)
+# Fix for RT-DETR: Use correct class to load model
+if config.model_name == 'rtdetr':
+    model_eval = RTDETR(best_model_path)
+else:
+    model_eval = YOLO(best_model_path)
 
 for batch_size in batch_sizes:
     times = []
@@ -837,7 +891,7 @@ for batch_size in batch_sizes:
         batch = sampled_images[i:i+min(batch_size, len(sampled_images)-i)]
         
         start_time = time.time()
-        results = model_eval.predict(batch, conf=0.5, iou=0.5, verbose=False)
+        results = model_eval.predict(batch, conf=config.conf, iou=config.iou, agnostic_nms=True, verbose=False)
         end_time = time.time()
         
         batch_time = end_time - start_time
@@ -1003,7 +1057,7 @@ if config.task == 'binary':
         infected_ratio = (infected_gt / total_gt) * 100
         
         # Get predictions and calculate recall
-        results = evaluator.model.predict(img_path, conf=0.5, iou=0.5, verbose=False)[0]
+        results = evaluator.model.predict(img_path, conf=config.conf, iou=config.iou, agnostic_nms=True, verbose=False)[0]
         
         infected_tp = 0
         if results.boxes is not None:
@@ -1013,7 +1067,7 @@ if config.task == 'binary':
                     # Check if matches any infected GT
                     for gt_box in infected_boxes:
                         iou = evaluator._compute_iou(pred_box, gt_box)
-                        if iou > 0.5:
+                        if iou > config.iou:
                             infected_tp += 1
                             break
         
@@ -1653,7 +1707,7 @@ def compute_tide_errors_complete(evaluator, split='test', max_images=None):
                         })
         
         # Get predictions
-        results = evaluator.model.predict(img_path, conf=0.5, iou=0.5, verbose=False)[0]
+        results = evaluator.model.predict(img_path, conf=config.conf, iou=config.iou, agnostic_nms=True, verbose=False)[0]
         pred_boxes = []
         
         if results.boxes is not None:
@@ -1679,8 +1733,8 @@ def compute_tide_errors_complete(evaluator, split='test', max_images=None):
                     best_gt_idx = gt_idx
             
             pred_class_name = evaluator.class_names[pred['class_id']]
-            
-            if best_iou >= 0.5:  # Matched with GT
+
+            if best_iou >= config.iou:  # Matched with GT
                 gt = gt_boxes[best_gt_idx]
                 gt_class_name = evaluator.class_names[gt['class_id']]
                 
@@ -1710,7 +1764,7 @@ def compute_tide_errors_complete(evaluator, split='test', max_images=None):
                     continue
                 if pred_boxes[i]['class_id'] == pred_boxes[j]['class_id']:
                     iou = evaluator._compute_iou(pred_boxes[i]['box'], pred_boxes[j]['box'])
-                    if iou > 0.5:
+                    if iou > config.iou:
                         class_name = evaluator.class_names[pred_boxes[i]['class_id']]
                         errors_per_class_raw[class_name]['duplicate'].append(1)
                         errors_aggregate_raw['duplicate'].append(1)
@@ -1956,25 +2010,35 @@ print("\n" + "="*70)
 print("GROUND TRUTH VS PREDICTIONS - VISUALIZATION & EXPORT")
 print("="*70)
 
-def save_all_predictions(evaluator, split='test', output_folder='predictions_output'):
-    """Save predictions for ALL images in the dataset"""
-    
+def save_all_predictions(evaluator, split='test', output_folder='predictions_output', dataset_name='d1'):
+    """
+    Save predictions for images in the dataset
+
+    For D3 (large dataset): Analyze ALL but only save first 200 visualizations to save space
+    """
+
     img_dir = evaluator.dataset_path / split / "images"
     lbl_dir = evaluator.dataset_path / split / "labels"
-    
+
     # Create output directory
     output_path = Path('../results') / experiment_name / output_folder / split
     output_path.mkdir(parents=True, exist_ok=True)
-    
+
     # Get all images
     img_files = list(img_dir.glob('*.jpg')) + list(img_dir.glob('*.png'))
-    
+
+    # D3-specific limit: only save first 200 visualizations
+    max_viz_to_save = 200 if dataset_name.lower() == 'd3' else len(img_files)
+
     print(f"Saving predictions for {len(img_files)} images to: {output_path}")
+    if dataset_name.lower() == 'd3':
+        print(f"⚠️  D3 Dataset: Saving only first {max_viz_to_save} visualizations (space optimization)")
     
     # Define colors
     colors = {'Uninfected': 'green', 'Infected': 'red'}
-    
-    for img_path in tqdm(img_files, desc="Saving predictions"):
+
+    saved_count = 0
+    for img_idx, img_path in enumerate(tqdm(img_files, desc="Saving predictions")):
         label_path = lbl_dir / (img_path.stem + '.txt')
         
         # Create figure for this image
@@ -2036,7 +2100,7 @@ def save_all_predictions(evaluator, split='test', output_folder='predictions_out
         
         # Get predictions
         pred_counts = {'Uninfected': 0, 'Infected': 0}
-        results = evaluator.model.predict(img_path, conf=0.5, iou=0.5, verbose=False)[0]
+        results = evaluator.model.predict(img_path, conf=config.conf, iou=config.iou, agnostic_nms=True, verbose=False)[0]
         
         if results.boxes is not None:
             for box in results.boxes:
@@ -2093,13 +2157,18 @@ def save_all_predictions(evaluator, split='test', output_folder='predictions_out
                   bbox_to_anchor=(0.5, -0.02))
         
         plt.tight_layout(rect=[0, 0.03, 1, 0.97])
-        
-        # Save figure
-        save_file = output_path / f"{img_path.stem}_predictions.png"
-        plt.savefig(save_file, dpi=150, bbox_inches='tight')
-        plt.close(fig)  # Close to free memory
-    
-    print(f"✓ All {len(img_files)} prediction images saved to: {output_path}")
+
+        # Save figure (with D3 limit of 200)
+        if img_idx < max_viz_to_save:
+            save_file = output_path / f"{img_path.stem}_predictions.png"
+            plt.savefig(save_file, dpi=150, bbox_inches='tight')
+            saved_count += 1
+        plt.close(fig)  # Always close to free memory
+
+    if dataset_name.lower() == 'd3':
+        print(f"✓ Saved {saved_count} prediction visualizations (first 200) to: {output_path}")
+    else:
+        print(f"✓ All {len(img_files)} prediction images saved to: {output_path}")
     return output_path
 
 def visualize_sample_predictions(evaluator, split='test', num_samples=6):
@@ -2182,7 +2251,7 @@ def visualize_sample_predictions(evaluator, split='test', num_samples=6):
         
         # Get predictions
         pred_counts = {'Uninfected': 0, 'Infected': 0}
-        results = evaluator.model.predict(img_path, conf=0.5, iou=0.5, verbose=False)[0]
+        results = evaluator.model.predict(img_path, conf=config.conf, iou=config.iou, agnostic_nms=True, verbose=False)[0]
         
         if results.boxes is not None:
             for box in results.boxes:
@@ -2245,7 +2314,7 @@ def visualize_sample_predictions(evaluator, split='test', num_samples=6):
 
 # Save ALL predictions to disk
 print("Saving all predictions...")
-output_folder = save_all_predictions(evaluator, split='test')
+output_folder = save_all_predictions(evaluator, split='test', dataset_name=args.dataset)
 
 # Visualize sample predictions in notebook
 print("\nVisualizing sample predictions...")
@@ -2336,9 +2405,9 @@ from matplotlib.patches import Rectangle
 from datetime import datetime
 from scipy.ndimage import gaussian_filter, zoom
 
-# Clear confidence thresholds - NO AMBIGUITY
-CONF_HIGH = 0.50  # >= 0.50 is confident (matches Cell 17)
-CONF_LOW = 0.30   # >= 0.30 but < 0.50 is uncertain
+# Clear confidence thresholds - NO AMBIGUITY (Guemas et al. methodology)
+CONF_HIGH = 0.25  # >= 0.25 is confident (matches evaluation threshold)
+CONF_LOW = 0.15   # >= 0.15 but < 0.25 is uncertain
 
 def calculate_iou(box1, box2):
     """Calculate IoU between two boxes"""
@@ -2390,26 +2459,36 @@ def calculate_proper_metrics(gt_boxes, pred_boxes, iou_threshold=0.5):
     fn = len(gt_boxes) - len(matched_gt)
     return tp, fp, fn
 
-def analyze_model_decisions_enhanced(model, test_images, model_name, save_dir, num_samples_to_display=6):
+def analyze_model_decisions_enhanced(model, test_images, model_name, save_dir, num_samples_to_display=6, dataset_name='d1'):
     """
     Analyze ALL test images with conventions matching Cell 17:
     - Ground Truth: Solid lines
     - Predictions: Indicated as predictions (dashed where possible)
-    - Confidence threshold: 0.5 (matching Cell 17)
+    - Confidence threshold: 0.25 (Guemas et al. methodology)
+
+    For D3 (large dataset): Analyze ALL but only save first 200 visualizations to save space
     """
-    
+
     # Create single output directory
     decision_dir = save_dir / model_name / 'decision_analysis'
     decision_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # For CSV output - ALL images (SINGLE SOURCE OF TRUTH)
     csv_data = []
-    
+
+    # D3-specific limit: analyze ALL, but only save first 200 visualizations
+    max_viz_to_save = 200 if dataset_name.lower() == 'd3' else len(test_images)
+
     print(f"Analyzing ALL {len(test_images)} test images...")
-    print(f"Will display {num_samples_to_display} in notebook, save all {len(test_images)} visualizations")
+    print(f"Will display {num_samples_to_display} in notebook")
+    if dataset_name.lower() == 'd3':
+        print(f"⚠️  D3 Dataset: Saving only first {max_viz_to_save} visualizations (space optimization)")
+        print(f"   BUT analyzing and exporting CSV/Excel for ALL {len(test_images)} images")
+    else:
+        print(f"Saving all {len(test_images)} visualizations")
     print(f"Confidence thresholds: Confident≥{CONF_HIGH}, Uncertain=[{CONF_LOW},{CONF_HIGH})")
     print(f"Visualization convention: GT=Solid lines, Pred=Dashed/Marked")
-    
+
     all_confidence_data = {'infected': [], 'uninfected': []}
     
     # ANALYZE AND VISUALIZE ALL IMAGES
@@ -2446,9 +2525,9 @@ def analyze_model_decisions_enhanced(model, test_images, model_name, save_dir, n
                             gt_infected += 1
                             gt_infected_boxes.append([x1, y1, box_w, box_h])
         
-        # Get predictions (matching Cell 17's conf=0.5)
-        results_normal = model.predict(img_path, conf=CONF_HIGH, verbose=False)[0]
-        results_low = model.predict(img_path, conf=CONF_LOW, verbose=False)[0]
+        # Get predictions (at CONF_HIGH and CONF_LOW thresholds)
+        results_normal = model.predict(img_path, conf=CONF_HIGH, iou=0.45, agnostic_nms=True, verbose=False)[0]
+        results_low = model.predict(img_path, conf=CONF_LOW, iou=0.45, agnostic_nms=True, verbose=False)[0]
         
         pred_infected = 0
         pred_uninfected = 0
@@ -2487,10 +2566,10 @@ def analyze_model_decisions_enhanced(model, test_images, model_name, save_dir, n
         
         # Calculate proper metrics using IoU
         tp_infected, fp_infected, fn_infected = calculate_proper_metrics(
-            gt_infected_boxes, pred_infected_boxes, iou_threshold=0.5
+            gt_infected_boxes, pred_infected_boxes, iou_threshold=config.iou
         )
         tp_uninfected, fp_uninfected, fn_uninfected = calculate_proper_metrics(
-            gt_uninfected_boxes, pred_uninfected_boxes, iou_threshold=0.5
+            gt_uninfected_boxes, pred_uninfected_boxes, iou_threshold=config.iou
         )
         
         # Calculate F1 scores safely
@@ -2629,7 +2708,8 @@ def analyze_model_decisions_enhanced(model, test_images, model_name, save_dir, n
                 x1, y1, x2, y2 = box.xyxy[0].int().tolist()
                 cls = int(box.cls.item())
                 conf = box.conf.item()
-                
+
+                # ONLY show uncertain boxes in this panel [CONF_LOW, CONF_HIGH)
                 if CONF_LOW <= conf < CONF_HIGH:  # Explicit uncertain range
                     # Dimmer colors for uncertain
                     color = (128, 0, 0) if cls == 1 else (0, 128, 0)
@@ -2637,9 +2717,7 @@ def analyze_model_decisions_enhanced(model, test_images, model_name, save_dir, n
                     cv2.putText(viz_low, f'{conf:.2f}', (x1, y1-5),
                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
                     additional_detections += 1
-                elif conf >= CONF_HIGH:
-                    color = (255, 0, 0) if cls == 1 else (0, 255, 0)
-                    cv2.rectangle(viz_low, (x1, y1), (x2, y2), color, 3)
+                # NOTE: Removed elif for conf >= CONF_HIGH - those belong in Panel 2, not here
         
         ax3.imshow(viz_low)
         ax3.set_title(f'Uncertain [{CONF_LOW}-{CONF_HIGH})\n+{additional_detections} uncertain', 
@@ -2666,9 +2744,10 @@ def analyze_model_decisions_enhanced(model, test_images, model_name, save_dir, n
                     decision_map[y1:y2, x1:x2] = np.minimum(
                         decision_map[y1:y2, x1:x2], -conf)
                 
-                # Uncertainty for low confidence
-                if CONF_LOW < conf < 0.6:
-                    uncertainty_map[y1:y2, x1:x2] = 1 - abs(conf - 0.5) * 2
+                # Uncertainty for low confidence (centered around uncertain range midpoint)
+                # Midpoint = (CONF_LOW + CONF_HIGH)/2 = (0.15 + 0.25)/2 = 0.20
+                if CONF_LOW < conf < 0.40:  # Extends from 0.15 to 0.40 (symmetric around 0.275)
+                    uncertainty_map[y1:y2, x1:x2] = 1 - abs(conf - 0.20) * 4  # Peak uncertainty at 0.20
         
         # Smooth maps
         decision_smooth = gaussian_filter(decision_map, sigma=5)
@@ -2759,16 +2838,21 @@ def analyze_model_decisions_enhanced(model, test_images, model_name, save_dir, n
                   bbox_to_anchor=(1.02, 1.0),  # Position outside plot to the right
                   fontsize=9)
         
-        # SAVE ALL VISUALIZATIONS IN SAME FOLDER
+        # SAVE VISUALIZATIONS (with D3 limit of 200)
         fig_path = decision_dir / f'decision_{img_id}.png'
-        
-        if img_idx < num_samples_to_display:
-            # Display first 6 in notebook
-            fig.savefig(fig_path, dpi=300, bbox_inches='tight', facecolor='white')
-            plt.show()
+
+        # Only save visualization if within limit for D3
+        if img_idx < max_viz_to_save:
+            if img_idx < num_samples_to_display:
+                # Display first 6 in notebook
+                fig.savefig(fig_path, dpi=300, bbox_inches='tight', facecolor='white')
+                plt.show()
+            else:
+                # Just save the rest without displaying
+                fig.savefig(fig_path, dpi=300, bbox_inches='tight', facecolor='white')
+                plt.close(fig)
         else:
-            # Just save the rest without displaying
-            fig.savefig(fig_path, dpi=300, bbox_inches='tight', facecolor='white')
+            # For D3 beyond 200: Skip saving visualization but keep all CSV data
             plt.close(fig)
         
         # Progress indicator
@@ -2841,7 +2925,8 @@ if test_samples:
         test_samples,  # Pass ALL test samples
         experiment_name,
         results_dir,
-        num_samples_to_display=6  # Display only 6 in notebook
+        num_samples_to_display=6,  # Display only 6 in notebook
+        dataset_name=args.dataset
     )
     
     print(f"\nQuick Summary:")

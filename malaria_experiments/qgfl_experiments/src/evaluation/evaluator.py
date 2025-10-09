@@ -9,7 +9,7 @@ import seaborn as sns
 from tqdm import tqdm
 import json
 from PIL import Image
-from ultralytics import YOLO
+from ultralytics import YOLO, RTDETR
 from tabulate import tabulate
 import torch
 
@@ -17,7 +17,15 @@ class ComprehensiveEvaluator:
     """Complete evaluation suite matching all paper requirements"""
     
     def __init__(self, model_path, dataset_path, config, output_dir="evaluation_results", yaml_path=None):
-        self.model = YOLO(model_path) if isinstance(model_path, (str, Path)) else model_path
+        # Fix for RT-DETR: Use RTDETR class to get correct predictor (RTDETRPredictor not DetectionPredictor)
+        if isinstance(model_path, (str, Path)):
+            model_path_str = str(model_path)
+            if 'rtdetr' in model_path_str.lower() or 'rt-detr' in model_path_str.lower() or config.model_name.lower().startswith('rtdetr'):
+                self.model = RTDETR(model_path)
+            else:
+                self.model = YOLO(model_path)
+        else:
+            self.model = model_path
         self.dataset_path = Path(dataset_path)
         self.config = config
         self.yaml_path = Path(yaml_path) if yaml_path else None
@@ -93,8 +101,9 @@ class ComprehensiveEvaluator:
         metrics = self.model.val(
             data=str(yaml_path),
             split=split,
-            conf=0.5,
-            iou=0.5,
+            conf=self.config.conf,  # From config (Guemas et al. methodology)
+            iou=self.config.iou,   # From config (Guemas et al. methodology)
+            agnostic_nms=True,  # Class-agnostic NMS (Guemas methodology)
             verbose=False
         )
         
@@ -153,7 +162,7 @@ class ComprehensiveEvaluator:
                             })
             
             # Get predictions
-            results = self.model.predict(img_path, conf=0.5, iou=0.5, verbose=False)[0]
+            results = self.model.predict(img_path, conf=self.config.conf, iou=self.config.iou, agnostic_nms=True, verbose=False)[0]
             pred_boxes = []
             
             if results.boxes is not None:
@@ -172,7 +181,7 @@ class ComprehensiveEvaluator:
             
             # For each prediction, find best matching GT
             for pred_idx, pred in enumerate(pred_boxes):
-                best_iou = 0.5
+                best_iou = 0.45  # Guemas et al. matching threshold
                 best_gt_idx = -1
                 
                 for gt_idx, gt in enumerate(gt_boxes):
@@ -256,8 +265,8 @@ class ComprehensiveEvaluator:
                                 'box': self._xywh_to_xyxy([x_center, y_center, width, height])
                             })
             
-            # Get predictions at low threshold
-            results = self.model.predict(img_path, conf=0.01, iou=0.5, verbose=False)[0]
+            # Get predictions at low threshold (conf=0.01 to capture full range for PR curve)
+            results = self.model.predict(img_path, conf=0.01, iou=self.config.iou, agnostic_nms=True, verbose=False)[0]
             
             if results.boxes is not None:
                 # Match and record
@@ -269,7 +278,7 @@ class ComprehensiveEvaluator:
                     pred_box = box.xyxy[0].tolist()
                     
                     # Find best matching GT
-                    best_iou = 0.5
+                    best_iou = 0.45  # Guemas et al. matching threshold
                     best_gt_idx = -1
                     
                     for gt_idx, gt in enumerate(gt_boxes):
@@ -411,7 +420,7 @@ class ComprehensiveEvaluator:
             infected_ratio = infected_count / total_count * 100
             
             # Get predictions
-            results = self.model.predict(img_path, conf=0.5, iou=0.5, verbose=False)[0]
+            results = self.model.predict(img_path, conf=self.config.conf, iou=self.config.iou, agnostic_nms=True, verbose=False)[0]
             
             # Calculate infected recall
             infected_tp = 0
@@ -422,7 +431,7 @@ class ComprehensiveEvaluator:
                         
                         # Check if matches any infected GT
                         for gt_box in gt_boxes_by_class[1]:
-                            if self._compute_iou(pred_box, gt_box) > 0.5:
+                            if self._compute_iou(pred_box, gt_box) > 0.45:
                                 infected_tp += 1
                                 break
             
@@ -512,7 +521,7 @@ class ComprehensiveEvaluator:
                             })
             
             # Get predictions
-            results = self.model.predict(img_path, conf=0.5, iou=0.5, verbose=False)[0]
+            results = self.model.predict(img_path, conf=self.config.conf, iou=self.config.iou, agnostic_nms=True, verbose=False)[0]
             pred_boxes = []
             
             if results.boxes is not None:
@@ -537,10 +546,10 @@ class ComprehensiveEvaluator:
                     if iou > best_iou:
                         best_iou = iou
                         best_gt_idx = gt_idx
-                
+
                 pred_class_name = self.class_names[pred['class_id']]
-                
-                if best_iou >= 0.5:
+
+                if best_iou >= 0.45:
                     gt = gt_boxes[best_gt_idx]
                     
                     if pred['class_id'] != gt['class_id']:
@@ -576,7 +585,7 @@ class ComprehensiveEvaluator:
                     # No check for matched status - check ALL predictions
                     if pred1['class_id'] == pred2['class_id']:
                         iou = self._compute_iou(pred1['box'], pred2['box'])
-                        if iou > 0.5:
+                        if iou > 0.45:
                             error_types_aggregate['duplicate'].append(1)
                             class_name = self.class_names[pred1['class_id']]
                             error_types_per_class[class_name]['duplicate'].append(1)
@@ -661,7 +670,7 @@ class ComprehensiveEvaluator:
                             })
             
             # Get predictions
-            results = self.model.predict(img_path, conf=0.5, iou=0.5, verbose=False)[0]
+            results = self.model.predict(img_path, conf=self.config.conf, iou=self.config.iou, agnostic_nms=True, verbose=False)[0]
             
             if results.boxes is not None:
                 for box in results.boxes:
@@ -669,7 +678,7 @@ class ComprehensiveEvaluator:
                     pred_box = box.xyxy[0].tolist()
                     
                     # Find best matching GT
-                    best_iou = 0.5
+                    best_iou = 0.45  # Guemas et al. matching threshold
                     best_gt_idx = -1
                     
                     for gt_idx, gt in enumerate(gt_boxes):
@@ -724,7 +733,7 @@ class ComprehensiveEvaluator:
             img_array = np.array(img)
             
             # Get predictions
-            results = self.model.predict(img_path, conf=0.5, iou=0.5, verbose=False)[0]
+            results = self.model.predict(img_path, conf=self.config.conf, iou=self.config.iou, agnostic_nms=True, verbose=False)[0]
             
             # Plot
             axes[row, col].imshow(img_array)
