@@ -424,17 +424,20 @@ class ComprehensiveEvaluator:
             
             # Calculate infected recall
             infected_tp = 0
+            matched_gt = [False] * len(gt_boxes_by_class[1])  # Track matched GT boxes to prevent duplicates
+
             if results.boxes is not None:
                 for box in results.boxes:
                     if int(box.cls.item()) == 1:  # Infected class
                         pred_box = box.xyxy[0].tolist()
-                        
-                        # Check if matches any infected GT
-                        for gt_box in gt_boxes_by_class[1]:
-                            if self._compute_iou(pred_box, gt_box) > 0.45:
+
+                        # Check if matches any infected GT (only unmatched ones)
+                        for gt_idx, gt_box in enumerate(gt_boxes_by_class[1]):
+                            if not matched_gt[gt_idx] and self._compute_iou(pred_box, gt_box) > 0.45:
                                 infected_tp += 1
+                                matched_gt[gt_idx] = True  # Mark GT as matched to prevent re-use
                                 break
-            
+
             infected_recall = infected_tp / infected_count if infected_count > 0 else 0
             
             # Bin the result
