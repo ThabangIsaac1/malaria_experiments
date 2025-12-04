@@ -1,9 +1,10 @@
 #!/usr/bin/env python
 # coding: utf-8
 """
-QGFL Malaria Detection - Cluster Training Script
-Converted from: notebooks/01_run_baseline.ipynb
+Class Weights Malaria Detection - Cluster Training Script
+Based on: cluster_run_baseline.py
 For cluster deployment with SLURM
+Loss: Class-weighted BCE for handling class imbalance
 """
 
 # ============================================================================
@@ -12,7 +13,7 @@ For cluster deployment with SLURM
 import argparse
 
 parser = argparse.ArgumentParser(
-    description='YOLO Baseline Training for Malaria Detection',
+    description='Class Weights Training for Malaria Detection',
     formatter_class=argparse.ArgumentDefaultsHelpFormatter
 )
 
@@ -56,6 +57,11 @@ parser.add_argument('--box', type=float, default=7.5,
 parser.add_argument('--seed', type=int, default=42,
                     help='Random seed for reproducibility (use 42, 123, 456 for 3x runs)')
 
+# Class weights specific arguments
+parser.add_argument('--weight-method', type=str, default='inverse_freq',
+                    choices=['inverse_freq', 'effective_num', 'sqrt_inverse'],
+                    help='Method for computing class weights')
+
 args = parser.parse_args()
 
 # Auto-select optimizer based on model type if not specified
@@ -66,12 +72,13 @@ if args.optimizer is None:
         args.optimizer = 'SGD'  # Explicit SGD for YOLO to preserve our hyperparameters
 
 print("=" * 70)
-print("BASELINE MALARIA DETECTION - CLUSTER TRAINING")
+print("CLASS WEIGHTS MALARIA DETECTION - CLUSTER TRAINING")
 print("=" * 70)
 print(f"Dataset: {args.dataset.upper()}")
 print(f"Model: {args.model}")
 print(f"Task: {args.task}")
-print(f"Loss Type: BASELINE (Standard BCE)")
+print(f"Loss Type: CLASS_WEIGHTS")
+print(f"Weight Method: {args.weight_method}")
 print(f"Seed: {args.seed}")
 print(f"Epochs: {args.epochs}")
 print(f"Batch Size: {args.batch_size}")
@@ -114,6 +121,7 @@ plt.rcParams['font.family'] = 'sans-serif'
 sns.set_style("whitegrid")
 
 from src.evaluation.evaluator import ComprehensiveEvaluator
+from src.losses.classweights import compute_class_weights, integrate_class_weights
 
 # ============================================================================
 # REPRODUCIBILITY
@@ -386,7 +394,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import wandb
-from src.training.strategy_wrapper import create_training_strategy
+# Class weights integration already done above
 
 print("="*70)
 print(f"TRAINING PIPELINE")
@@ -434,34 +442,57 @@ for class_name, count in class_distribution.items():
     percentage = (count / total_annotations * 100) if total_annotations > 0 else 0
     print(f"  {class_name}: {count} ({percentage:.1f}%)")
 
-# Select training strategy
-TRAINING_STRATEGY = getattr(config, 'training_strategy', 'no_weights')
-print(f"\nSelected Strategy: {TRAINING_STRATEGY}")
+# ============================================================================
+# COMPUTE CLASS WEIGHTS
+# ============================================================================
+print("\n" + "=" * 70)
+print("COMPUTING CLASS WEIGHTS")
+print("=" * 70)
 
-# Create strategy
-strategy = create_training_strategy(TRAINING_STRATEGY, config, class_distribution)
-strategy_params = strategy.get_training_params()
-hyperparameter_adjustments = strategy.get_hyperparameter_adjustments()
+class_weights_result = compute_class_weights(
+    dataset_path=yolo_path,
+    class_names=config.get_class_names(),
+    method=args.weight_method
+)
 
-# Update experiment name with environment prefix, seed, and timestamp
+print(f"\nClass Weights ({args.weight_method}):")
+print(f"  Uninfected: {class_weights_result['uninfected']:.4f}")
+print(f"  Infected: {class_weights_result['infected']:.4f}")
+print(f"  Class Imbalance Ratio: {class_weights_result['ratio']:.1f}:1")
+print(f"  Counts: {class_weights_result['counts']}")
+
+# ============================================================================
+# INTEGRATE CLASS WEIGHTS VIA MONKEY-PATCHING
+# ============================================================================
+print("\n" + "=" * 70)
+print("INTEGRATING CLASS WEIGHTS LOSS")
+print("=" * 70)
+
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+integrate_class_weights(class_weights_result, model_type=config.model_name, device=device)
+
+# Update experiment name with _cw_ suffix and seed
 env_prefix = "cluster_" if os.environ.get('SLURM_JOB_ID') else "laptop_"
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-experiment_name = f"{env_prefix}{config.model_name}_{config.dataset}_{config.task}_baseline_s{args.seed:03d}_{timestamp}"
+experiment_name = f"{env_prefix}{config.model_name}_{config.dataset}_{config.task}_cw_s{args.seed:03d}_{timestamp}"
 print(f"\nExperiment Name: {experiment_name}")
 
 # Update W&B config if active
 if config.use_wandb:
     if not hasattr(wandb, 'run') or wandb.run is None:
         raise RuntimeError("W&B not initialized. Run Cell 7 first")
-    
+
     wandb.config.update({
-        'training_strategy': strategy.get_strategy_name(),
+        'loss_type': 'classweights',
+        'weight_method': args.weight_method,
+        'class_weight_uninfected': class_weights_result['uninfected'],
+        'class_weight_infected': class_weights_result['infected'],
         'class_distribution': class_distribution,
-        'minority_classes': [config.get_class_names()[i] for i in strategy.minority_classes],
-        'class_weights': strategy.class_weights.tolist(),
+        'class_imbalance_ratio': class_weights_result['ratio'],
+        'seed': args.seed,
         'total_training_annotations': total_annotations
     })
-    
+
     wandb.run.name = experiment_name
 
 # Track training start time
@@ -526,12 +557,7 @@ if config.use_wandb:
     print(f"  - IoU threshold: {config.iou}")
     print(f"  - Agnostic NMS: True")
 
-# Apply hyperparameter adjustments
-for param, value in hyperparameter_adjustments.items():
-    if hasattr(config, param):
-        old_value = getattr(config, param)
-        print(f"Adjusting {param}: {old_value} -> {value}")
-        setattr(config, param, value)
+# Class weights don't require hyperparameter adjustments - using default config
 
 # Prepare training arguments (NO W&B project parameter)
 # Cell 8: Complete Training with Post-Training W&B Logging (UPDATED)
@@ -544,7 +570,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import wandb
-from src.training.strategy_wrapper import create_training_strategy
+# Class weights integration already done above
 
 print("="*70)
 print(f"TRAINING PIPELINE")
@@ -588,7 +614,7 @@ train_args = {
 
     'box': args.box,  # CLI override (default: 7.5)
     'cls': args.cls,  # CLI override (default: 0.5)
-    'dfl': strategy_params.get('dfl', 1.5),
+    'dfl': 1.5,  # Default DFL loss weight
     
     'hsv_h': getattr(config, 'hsv_h', 0.015),
     'hsv_s': getattr(config, 'hsv_s', 0.7),
@@ -616,7 +642,7 @@ train_args = {
 
 
 print(f"\nStarting training for {config.epochs} epochs...")
-print(f"Strategy: {strategy.get_strategy_name()}")
+print(f"Loss Type: CLASS_WEIGHTS ({args.weight_method})")
 print(f"Loss weights - Box: {train_args['box']}, Cls: {train_args['cls']}, DFL: {train_args['dfl']}")
 print("\n" + "="*50)
 print("MONITOR CONSOLE OUTPUT FOR REAL-TIME PROGRESS")
@@ -741,8 +767,7 @@ if config.use_wandb and results_csv.exists():
         'total_training_time_minutes': total_training_time/60
     })
     
-    # Log strategy-specific metrics
-    strategy.log_strategy_metrics({})
+    # Log class weights specific info (already logged in config)
     
     print(f"\n✓ Successfully logged all training metrics to W&B")
     print(f"✓ Best mAP50: {best_map50:.4f} at epoch {best_epoch}")

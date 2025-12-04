@@ -43,6 +43,14 @@ parser.add_argument('--gamma-infected', type=float, default=8.0,
                     help='QGFL gamma for infected class (default: 8.0 from paper)')
 parser.add_argument('--gamma-uninfected', type=float, default=4.0,
                     help='QGFL gamma for uninfected class (default: 4.0 from paper)')
+parser.add_argument('--alpha-infected', type=float, default=0.9,
+                    help='QGFL alpha for infected class (default: 0.9 from paper)')
+parser.add_argument('--alpha-uninfected', type=float, default=0.1,
+                    help='QGFL alpha for uninfected class (default: 0.1)')
+parser.add_argument('--difficulty-threshold', type=float, default=0.925,
+                    help='QGFL difficulty threshold (default: 0.925)')
+parser.add_argument('--quality-margin', type=float, default=0.5,
+                    help='QGFL quality margin (default: 0.5)')
 parser.add_argument('--qgfl-debug', action='store_true',
                     help='Enable QGFL debug logging')
 
@@ -61,6 +69,10 @@ parser.add_argument('--cls', type=float, default=0.5,
 parser.add_argument('--box', type=float, default=7.5,
                     help='Box loss weight')
 
+# Seed for reproducibility (statistical testing)
+parser.add_argument('--seed', type=int, default=42,
+                    help='Random seed for reproducibility (use 42, 123, 456 for 3x runs)')
+
 args = parser.parse_args()
 
 # Auto-select optimizer based on model type if not specified
@@ -78,9 +90,14 @@ print(f"Model: {args.model}")
 print(f"Task: {args.task}")
 print(f"Loss Type: {args.loss_type.upper()}")
 if args.loss_type == 'qgfl':
+    print(f"QGFL Alpha (infected): {args.alpha_infected}")
+    print(f"QGFL Alpha (uninfected): {args.alpha_uninfected}")
     print(f"QGFL Gamma (infected): {args.gamma_infected}")
     print(f"QGFL Gamma (uninfected): {args.gamma_uninfected}")
+    print(f"QGFL Difficulty Threshold: {args.difficulty_threshold}")
+    print(f"QGFL Quality Margin: {args.quality_margin}")
     print(f"QGFL Debug: {args.qgfl_debug}")
+print(f"Seed: {args.seed}")
 print(f"Epochs: {args.epochs}")
 print(f"Batch Size: {args.batch_size}")
 print(f"W&B Logging: {args.use_wandb}")
@@ -139,12 +156,12 @@ if args.loss_type == 'qgfl':
     # Initialize QGFL losses with configurable parameters
     qgfl_yolo = QGFLYOLOLoss(
         nc=2,
-        infected_alpha=0.9,
-        uninfected_alpha=0.1,
+        infected_alpha=args.alpha_infected,
+        uninfected_alpha=args.alpha_uninfected,
         infected_gamma=args.gamma_infected,
         uninfected_gamma=args.gamma_uninfected,
-        difficulty_threshold=0.925,
-        quality_margin=0.5,
+        difficulty_threshold=args.difficulty_threshold,
+        quality_margin=args.quality_margin,
         quality_factor=2.0,
         uiou_start=2.0,
         uiou_end=0.5,
@@ -153,12 +170,12 @@ if args.loss_type == 'qgfl':
 
     qgfl_rtdetr = QGFLRTDETRLoss(
         nc=2,
-        infected_alpha=0.9,
-        uninfected_alpha=0.1,
+        infected_alpha=args.alpha_infected,
+        uninfected_alpha=args.alpha_uninfected,
         infected_gamma=args.gamma_infected,
         uninfected_gamma=args.gamma_uninfected,
-        difficulty_threshold=0.925,
-        quality_margin=0.5,
+        difficulty_threshold=args.difficulty_threshold,
+        quality_margin=args.quality_margin,
         quality_factor=2.0,
         uiou_start=2.0,
         uiou_end=0.5,
@@ -295,7 +312,7 @@ if args.loss_type == 'qgfl':
         print(f"[QGFL] Could not import RT-DETR loss module: {e}")
         print(f"[QGFL] RT-DETR QGFL support not available")
 
-    print(f"[QGFL] YOLO Parameters: α=[0.9, 0.1], γ=[{args.gamma_infected}, {args.gamma_uninfected}], threshold=0.925")
+    print(f"[QGFL] YOLO Parameters: α=[{args.alpha_infected}, {args.alpha_uninfected}], γ=[{args.gamma_infected}, {args.gamma_uninfected}], threshold={args.difficulty_threshold}")
     print(f"[QGFL] Debug mode: {args.qgfl_debug}")
     print("=" * 70 + "\n")
 else:
@@ -311,8 +328,12 @@ def set_seed(seed=42):
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+    # For deterministic algorithms (may impact performance)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
-set_seed(42)
+set_seed(args.seed)
+print(f"\n[SEED] Random seed set to: {args.seed}")
 
 print(f"\nPyTorch: {torch.__version__}")
 print(f"CUDA available: {torch.cuda.is_available()}")
@@ -636,15 +657,20 @@ is_cluster = (
     'hpc' in socket.gethostname().lower() or
     'node' in socket.gethostname().lower()
 )
-env_prefix = "" if is_cluster else "laptop_"
+env_prefix = "cluster_" if is_cluster else "laptop_"
 
-# Update experiment name
+# Update experiment name with timestamp for unique folder identification
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
 if args.loss_type == 'qgfl':
-    # For QGFL, use simplified naming without strategy suffix
-    experiment_name = f"{env_prefix}{config.model_name}_{config.dataset}_{config.task}_qgfl"
+    # For QGFL, include alpha value, seed, and timestamp for unique identification
+    # e.g., cluster_yolov11s_d1_binary_qgfl_a035_s123_20231123_142530
+    alpha_str = f"a{int(args.alpha_infected*100):03d}"  # a035 for alpha=0.35, a090 for alpha=0.9
+    experiment_name = f"{env_prefix}{config.model_name}_{config.dataset}_{config.task}_qgfl_{alpha_str}_s{args.seed:03d}_{timestamp}"
 else:
-    # For baseline, include strategy
-    experiment_name = f"{env_prefix}{config.model_name}_{config.dataset}_{config.task}_{strategy.get_strategy_name()}"
+    # For baseline, include strategy, seed, and timestamp
+    # e.g., cluster_yolov11s_d1_binary_baseline_s123_20231123_143000
+    experiment_name = f"{env_prefix}{config.model_name}_{config.dataset}_{config.task}_{strategy.get_strategy_name()}_s{args.seed:03d}_{timestamp}"
 
 print(f"\nEnvironment: {'CLUSTER' if is_cluster else 'LAPTOP'} (hostname: {socket.gethostname()})")
 print(f"Experiment Name: {experiment_name}")
@@ -667,20 +693,20 @@ if config.use_wandb:
     # Add QGFL-specific parameters if using QGFL
     if args.loss_type == 'qgfl':
         wandb_update.update({
-            'qgfl/infected_alpha': 0.9,
-            'qgfl/uninfected_alpha': 0.1,
+            'qgfl/infected_alpha': args.alpha_infected,
+            'qgfl/uninfected_alpha': args.alpha_uninfected,
             'qgfl/infected_gamma': args.gamma_infected,
             'qgfl/uninfected_gamma': args.gamma_uninfected,
-            'qgfl/difficulty_threshold': 0.925,
-            'qgfl/quality_margin': 0.5,
+            'qgfl/difficulty_threshold': args.difficulty_threshold,
+            'qgfl/quality_margin': args.quality_margin,
             'qgfl/quality_factor': 2.0,
             'qgfl/uiou_start': 2.0,
             'qgfl/uiou_end': 0.5,
             'qgfl/debug': args.qgfl_debug
         })
         print(f"\n✓ QGFL Parameters logged to W&B:")
-        print(f"  - Infected: α={0.9}, γ={args.gamma_infected}")
-        print(f"  - Uninfected: α={0.1}, γ={args.gamma_uninfected}")
+        print(f"  - Infected: α={args.alpha_infected}, γ={args.gamma_infected}")
+        print(f"  - Uninfected: α={args.alpha_uninfected}, γ={args.gamma_uninfected}")
         print(f"  - UIoU decay: {2.0} → {0.5}")
 
     wandb.config.update(wandb_update)
@@ -759,17 +785,21 @@ if config.use_wandb:
             'qgfl/gamma_uninfected': args.gamma_uninfected,
             'qgfl/uiou_start': 2.0,  # Hardcoded in QGFL initialization
             'qgfl/uiou_end': 0.5,    # Hardcoded in QGFL initialization
-            'qgfl/infected_alpha': 0.9,  # Hardcoded in QGFL initialization
-            'qgfl/uninfected_alpha': 0.1  # Hardcoded in QGFL initialization
+            'qgfl/infected_alpha': args.alpha_infected,
+            'qgfl/uninfected_alpha': args.alpha_uninfected,
+            'qgfl/difficulty_threshold': args.difficulty_threshold,
+            'qgfl/quality_margin': args.quality_margin
         })
 
         print(f"\n✓ QGFL parameters logged to W&B:")
         print(f"  - gamma_infected: {args.gamma_infected}")
         print(f"  - gamma_uninfected: {args.gamma_uninfected}")
+        print(f"  - infected_alpha: {args.alpha_infected}")
+        print(f"  - uninfected_alpha: {args.alpha_uninfected}")
+        print(f"  - difficulty_threshold: {args.difficulty_threshold}")
+        print(f"  - quality_margin: {args.quality_margin}")
         print(f"  - uiou_start: 2.0")
         print(f"  - uiou_end: 0.5")
-        print(f"  - infected_alpha: 0.9")
-        print(f"  - uninfected_alpha: 0.1")
 
 # Apply hyperparameter adjustments
 for param, value in hyperparameter_adjustments.items():
@@ -826,7 +856,7 @@ train_args = {
     'val': getattr(config, 'val', True),
     'amp': getattr(config, 'amp', True),
     'exist_ok': getattr(config, 'exist_ok', True),
-    'seed': getattr(config, 'seed', 42),
+    'seed': args.seed,  # CLI seed for reproducibility
     'deterministic': getattr(config, 'deterministic', True),
     'single_cls': getattr(config, 'single_cls', False),
     'rect': getattr(config, 'rect', False),
