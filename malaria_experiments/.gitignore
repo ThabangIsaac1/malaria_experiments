@@ -79,7 +79,28 @@ notebooks/wandb/
 # Temporary files
 *.tmp
 *.temp
+~$*
+
+# Claude Code
 .claude/
+*.claude
+
+# VSCode
+.vscode/
+*.code-workspace
+
+# Test outputs (local testing only)
+test_*/
+*_test_output/
+
+# Cluster uploads (temporary)
+cluster_uploads/
+
+# Mini datasets (testing only)
+dataset_*_mini/
+
+# Paper results (managed separately)
+paper_results/
 
 # macOS
 .DS_Store
